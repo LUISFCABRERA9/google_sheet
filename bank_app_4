@@ -1,0 +1,94 @@
+const COLUMN_BILL_NUMBER = 2; // Cột B: transaction_code
+const MONEY_AMOUNT_NUMBER = 3; // Cột C: money_amount
+const VERSION_CODE = '1.0.4'
+
+function extractBankAndRef(text) {
+  const regex = /ທະນາຄານ:\s*([A-Z]+).*?ເລກອ້າງອີງຮ້ານຄ້າ:\s*([A-Z0-9]+)/;
+  const match = text.match(regex);
+  if (!match) return text;
+  
+  const bank = match[1];
+  const merchantRef = match[2];
+  return `${bank} | ${merchantRef}`;
+}
+
+function addRecord(fullname, transaction_code, money_amount, time, type) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetName = (type === "NHAN") ? "NHAN_TIEN" : "CHUYEN_TIEN";
+  var sheet = ss.getSheetByName(sheetName);
+  var lock = LockService.getScriptLock();
+
+  if (!sheet) {
+    return { "status": "error", "message": "Không tìm thấy sheet: " + sheetName };
+  }
+  
+  if (!transaction_code) {
+    return { "status": "error", "message": "Thiếu mã transaction_code" };
+  }
+  lock.waitLock(1000)
+  var lastRow = sheet.getLastRow();
+  
+  // LOGIC KIỂM TRA
+  if (lastRow > 1) {
+      // Chỉ lấy cột B (Mã giao dịch) để kiểm tra cho nhẹ và nhanh
+      var codes = sheet.getRange(2, COLUMN_BILL_NUMBER, lastRow - 1, 1).getValues();
+      
+      // Kiểm tra xem transaction_code mới có nằm trong mảng codes không
+      var isDuplicate = codes.some(function(row) {
+        return String(row[0]).trim() === String(transaction_code).trim();
+      });
+      if (isDuplicate) {
+        return { 
+          "status": "error", 
+          "message": "Mã giao dịch " + transaction_code + " đã tồn tại!" 
+        };
+      }
+    }
+
+  sheet.appendRow([fullname, transaction_code, money_amount, time]);
+  lock.releaseLock()
+  return { "status": "success", "message": "Đã thêm dữ liệu thành công!" };
+}
+
+
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var type = data.type;
+    var time = data.time || "";
+    var fullname = data.fullname || "";
+    var transaction_code = data.transaction_code;
+    var money_amount = data.money_amount;
+
+    if (fullname.includes("QR")) {
+      var parts = fullname.split("|");
+      if (parts.length > 5) {
+        fullname = parts[1] + "|" +  parts[2];
+      }
+    }
+
+    if (type !== "NHAN") {
+      fullname = extractBankAndRef(fullname);
+    }
+
+    var result = addRecord(fullname, transaction_code, money_amount, time, type);
+
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ "status": "error", "message": error.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  var status = {
+    "status": "active",
+    "message": "API Spreadsheet đang hoạt động bình thường!",
+    "timestamp": new Date().toLocaleString(),
+    "version":VERSION_CODE
+  };
+  return ContentService.createTextOutput(JSON.stringify(status))
+    .setMimeType(ContentService.MimeType.JSON);
+}
